@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>تتبع وقت الدراسة - أوفلاين</title>
+  <style>
+    :root {
+      --main-color: #4CAF50;
+      --accent-color: #388E3C;
+      --bg-color: #f1fdf3;
+      --text-color: #222;
+    }
+
+    body {
+      margin: 0;
+      padding: 1rem;
+      font-family: 'Tajawal', sans-serif;
+      background-color: var(--bg-color);
+      color: var(--text-color);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-height: 100vh;
+    }
+
+    h1 {
+      font-size: 1.8rem;
+      margin-bottom: 1rem;
+      color: var(--main-color);
+      text-align: center;
+    }
+
+    .timer {
+      font-size: 2.5rem;
+      font-weight: bold;
+      margin: 1rem 0;
+      color: #333;
+    }
+
+    .buttons {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 0.8rem;
+      margin-bottom: 1.5rem;
+      width: 100%;
+      max-width: 400px;
+    }
+
+    button {
+      flex: 1 1 45%;
+      padding: 1rem;
+      font-size: 1rem;
+      border: none;
+      border-radius: 10px;
+      background-color: var(--main-color);
+      color: white;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+      cursor: pointer;
+      transition: background-color 0.3s;
+    }
+
+    button:hover {
+      background-color: var(--accent-color);
+    }
+
+    .info {
+      font-size: 1.1rem;
+      margin-bottom: 1.5rem;
+      text-align: center;
+    }
+
+    .section {
+      background-color: white;
+      padding: 1rem;
+      border-radius: 12px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      width: 100%;
+      max-width: 400px;
+      margin-bottom: 2rem;
+      position: relative;
+    }
+
+    .section h2 {
+      font-size: 1.2rem;
+      color: var(--accent-color);
+      margin-bottom: 0.5rem;
+    }
+
+    input[type="number"] {
+      padding: 0.5rem;
+      font-size: 1rem;
+      width: 100px;
+      border-radius: 8px;
+      border: 1px solid #ccc;
+      text-align: center;
+    }
+
+    canvas {
+      max-width: 100%;
+      margin-top: 1rem;
+    }
+
+    #goalStatus {
+      margin-top: 0.8rem;
+      font-weight: bold;
+      font-size: 1rem;
+    }
+
+    @media (max-width: 400px) {
+      .timer {
+        font-size: 2rem;
+      }
+
+      button {
+        font-size: 0.9rem;
+        padding: 0.8rem;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <h1>📚 وقت دراستي</h1>
+
+  <div class="timer" id="timer">00:00:00</div>
+
+  <div class="buttons">
+    <button onclick="startTimer()">ابدأ</button>
+    <button onclick="pauseTimer()">إيقاف</button>
+    <button onclick="startBreak()">استراحة</button>
+  </div>
+
+  <div class="info">
+    <p>📆 مجموع الوقت: <span id="totalTime">00:00:00</span></p>
+    <p>🎯 عدد الجلسات: <span id="sessionCount">0</span></p>
+  </div>
+
+  <!-- إضافة قسم الهدف -->
+  <div class="section">
+    <h2>🎯 هدف الدراسة اليومي (ساعات)</h2>
+    <input type="number" id="goalInput" min="0" step="0.1" value="2" />
+    <div id="goalStatus"></div>
+    <button onclick="saveGoal()">حفظ الهدف</button>
+  </div>
+
+  <div class="section">
+    <h2>💡 تحفيز اليوم</h2>
+    <p id="motivation"></p>
+  </div>
+
+  <div class="section">
+    <h2>🕒 مدة الاستراحة (بالدقائق)</h2>
+    <input type="number" id="breakDuration" value="5" min="1" max="60" />
+    <p id="breakTimer" style="margin-top: 0.5rem; font-size: 1.5rem; color: #e65100;"></p>
+  </div>
+
+  <div class="section">
+    <h2>📈 تقدّم الأسبوع</h2>
+    <button onclick="saveTodayProgress()">تسجيل التقدم اليومي</button>
+    <canvas id="progressChart"></canvas>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <script>
+    // ---- IndexedDB setup ----
+    const dbName = "StudyTrackerDB";
+    const storeName = "studyData";
+    const goalStoreName = "goalData";
+    let db;
+
+    function openDB() {
+      return new Promise((resolve, reject) => {
+        const request = indexedDB.open(dbName, 1);
+
+        request.onupgradeneeded = (event) => {
+          db = event.target.result;
+          if (!db.objectStoreNames.contains(storeName)) {
+            db.createObjectStore(storeName, { keyPath: "date" });
+          }
+          if (!db.objectStoreNames.contains(goalStoreName)) {
+            db.createObjectStore(goalStoreName, { keyPath: "id" });
+          }
+        };
+
+        request.onsuccess = (event) => {
+          db = event.target.result;
+          resolve(db);
+        };
+
+        request.onerror = () => reject("خطأ بفتح قاعدة البيانات");
+      });
+    }
+
+    async function saveTodayData(dateStr, studySeconds, sessionsCount) {
+      const db = await openDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(storeName, "readwrite");
+        const store = tx.objectStore(storeName);
+        const data = { date: dateStr, studySeconds, sessionsCount };
+        const request = store.put(data);
+
+        request.onsuccess = () => resolve();
+        request.onerror = () => reject("خطأ بحفظ البيانات");
+      });
+    }
+
+    async function getDataByDate(dateStr) {
+      const db = await openDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(storeName, "readonly");
+        const store = tx.objectStore(storeName);
+        const request = store.get(dateStr);
+
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject("خطأ بتحميل البيانات");
+      });
+    }
+
+    // ---- تخزين وقراءة الهدف ----
+    async function saveGoalValue(goalHours) {
+      const db = await openDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(goalStoreName, "readwrite");
+        const store = tx.objectStore(goalStoreName);
+        const request = store.put({ id: 1, goalHours });
+
+        request.onsuccess = () => resolve();
+        request.onerror = () => reject("خطأ بحفظ الهدف");
+      });
+    }
+
+    async function getGoalValue() {
+      const db = await openDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(goalStoreName, "readonly");
+        const store = tx.objectStore(goalStoreName);
+        const request = store.get(1);
+
+        request.onsuccess = () => resolve(request.result ? request.result.goalHours : null);
+        request.onerror = () => reject("خطأ بتحميل الهدف");
+      });
+    }
+
+    // بيانات الدراسة
+    let startTime, timerInterval;
+    let totalSeconds = 0;
+    let isRunning = false;
+    let breakInterval;
+
+    const timerEl = document.getElementById("timer");
+    const totalEl = document.getElementById("totalTime");
+    const sessionEl = document.getElementById("sessionCount");
+    const goalInput = document.getElementById("goalInput");
+    const goalStatus = document.getElementById("goalStatus");
+
+    // التاريخ الحالي
+    function todayString() {
+      return new Date().toDateString();
+    }
+
+    async function loadTodayProgress() {
+      const today = todayString();
+      const data = await getDataByDate(today);
+      if (data) {
+        totalSeconds = data.studySeconds || 0;
+        sessionEl.textContent = data.sessionsCount || 0;
+      } else {
+        totalSeconds = 0;
+        sessionEl.textContent = "0";
+      }
+      updateDisplay();
+      updateGoalStatus();
+    }
+
+    async function loadGoal() {
+      const goal = await getGoalValue();
+      if (goal !== null) {
+        goalInput.value = goal;
+        updateGoalStatus();
+      }
+    }
+
+    async function saveGoal() {
+      let val = parseFloat(goalInput.value);
+      if (isNaN(val) || val < 0) {
+        alert("رجاءً أدخل رقم هدف صحيح");
+        return;
+      }
+      await saveGoalValue(val);
+      updateGoalStatus();
+      alert("✅ تم حفظ هدف الدراسة");
+    }
+
+    function updateGoalStatus() {
+      let goalHours = parseFloat(goalInput.value);
+      if (isNaN(goalHours) || goalHours <= 0) {
+        goalStatus.textContent = "";
+        return;
+      }
+      let studiedHours = totalSeconds / 3600;
+      if (studiedHours >= goalHours) {
+        goalStatus.textContent = "🎉 مبروك! وصلت لهدفك اليوم ✅";
+        goalStatus.style.color = "green";
+      } else {
+        let remaining = (goalHours - studiedHours).toFixed(2);
+        goalStatus.textContent = `📌 تبقى ${remaining} ساعات لتحقيق الهدف`;
+        goalStatus.style.color = "orange";
+      }
+    }
+
+    window.onload = async function () {
+      await loadTodayProgress();
+      await loadGoal();
+      showMotivation();
+      updateChart();
+    };
+
+    function startTimer() {
+      if (isRunning) return;
+      isRunning = true;
+      startTime = Date.now();
+      timerInterval = setInterval(() => {
+        const elapsed = Math.floor((Date.now() - startTime) / 1000);
+        timerEl.textContent = formatTime(elapsed);
+      }, 1000);
+    }
+
+    async function pauseTimer() {
+      if (!isRunning) return;
+      isRunning = false;
+      clearInterval(timerInterval);
+      const elapsed = Math.floor((Date.now() - startTime) / 1000);
+      totalSeconds += elapsed;
+      timerEl.textContent = "00:00:00";
+      updateDisplay();
+      let count = parseInt(sessionEl.textContent) || 0;
+      count++;
+      sessionEl.textContent = count;
+      await saveTodayData(todayString(), totalSeconds, count);
+      updateGoalStatus();
+    }
+
+    function updateDisplay() {
+      totalEl.textContent = formatTime(totalSeconds);
+    }
+
+    function formatTime(seconds) {
+      const h = String(Math.floor(seconds / 3600)).padStart(2, "0");
+      const m = String(Math.floor((seconds % 3600) / 60)).padStart(2, "0");
+      const s = String(seconds % 60).padStart(2, "0");
+      return `${h}:${m}:${s}`;
+    }
+
+    function startBreak() {
+      const minutes = parseInt(document.getElementById("breakDuration").value) || 5;
+      let breakSeconds = minutes * 60;
+      const breakTimer = document.getElementById("breakTimer");
+      breakTimer.textContent = formatTime(breakSeconds);
+
+      if (breakInterval) clearInterval(breakInterval);
+
+      breakInterval = setInterval(() => {
+        breakSeconds--;
+        breakTimer.textContent = formatTime(breakSeconds);
+        if (breakSeconds <= 0) {
+          clearInterval(breakInterval);
+          breakTimer.textContent = "";
+
+          const msg = document.createElement("div");
+          msg.textContent = "✅ انتهى وقت الراحة! شد الهمة ✨";
+          msg.style.padding = "1rem";
+          msg.style.background = "#d4edda";
+          msg.style.color = "#155724";
+          msg.style.border = "1px solid #c3e6cb";
+          msg.style.borderRadius = "10px";
+          msg.style.margin = "1rem auto";
+          msg.style.textAlign = "center";
+          msg.style.fontWeight = "bold";
+
+          const container = breakTimer.parentElement;
+          const oldMsg = container.querySelector(".break-message");
+          if (oldMsg) oldMsg.remove();
+
+          msg.classList.add("break-message");
+          container.appendChild(msg);
+
+          if (navigator.vibrate) {
+            navigator.vibrate([200, 100, 200]);
+          }
+        }
+      }, 1000);
+    }
+
+    function showMotivation() {
+      const messages = [
+        "اليوم أفضل وقت للبدء! 🚀",
+        "أنت تقترب من هدفك كل دقيقة. 💪",
+        "لا تضغط على نفسك... خطوة كل يوم تكفي. 🌱",
+        "كل تعبك اليوم رح تفرح فيه بكرا. 🏆",
+        "استمر! المستقبل يبتسم لك. ✨"
+      ];
+      const index = new Date().getDay() % messages.length;
+      document.getElementById("motivation").textContent = messages[index];
+    }
+
+    // بيانات الرسم البياني الأسبوعي
+    const chartDays = ["الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"];
+    let weeklyData = [];
+
+    async function loadWeeklyProgress() {
+      weeklyData = [];
+      for (let i = 0; i < 7; i++) {
+        const dayDate = new Date();
+        dayDate.setDate(dayDate.getDate() - ((dayDate.getDay() + 7 - i) % 7));
+        const dayStr = dayDate.toDateString();
+        const data = await getDataByDate(dayStr);
+        weeklyData[i] = data ? +(data.studySeconds / 3600).toFixed(2) : 0;
+      }
+    }
+
+    async function saveTodayProgress() {
+      await saveTodayData(todayString(), totalSeconds, parseInt(sessionEl.textContent) || 0);
+      alert("✅ تم تسجيل التقدم لليوم!");
+      await loadWeeklyProgress();
+      updateChart();
+    }
+
+    let chart;
+    async function updateChart() {
+      await loadWeeklyProgress();
+      const ctx = document.getElementById('progressChart').getContext('2d');
+      if (chart) chart.destroy();
+      chart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: chartDays,
+          datasets: [{
+            label: 'عدد ساعات الدراسة',
+            data: weeklyData,
+            backgroundColor: '#4CAF50'
+          }]
+        },
+        options: {
+          scales: {
+            y: {
+              beginAtZero: true,
+              ticks: { stepSize: 1 }
+            }
+          }
+        }
+      });
+    }
+
+    // Service Worker تسجيل
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('sw.js')
+      .then(() => console.log('تم تسجيل Service Worker بنجاح'))
+      .catch(err => console.error('فشل تسجيل Service Worker:', err));
+    }
+
+  </script>
+
+</body>
+</html>
