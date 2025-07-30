@@ -169,11 +169,12 @@
     const dbName = "StudyTrackerDB";
     const storeName = "studyData";
     const goalStoreName = "goalData";
+    const activeSessionStore = "activeSessions";
     let db;
 
     function openDB() {
       return new Promise((resolve, reject) => {
-        const request = indexedDB.open(dbName, 1);
+        const request = indexedDB.open(dbName, 2); // Increased version number
 
         request.onupgradeneeded = (event) => {
           db = event.target.result;
@@ -183,6 +184,9 @@
           if (!db.objectStoreNames.contains(goalStoreName)) {
             db.createObjectStore(goalStoreName, { keyPath: "id" });
           }
+          if (!db.objectStoreNames.contains(activeSessionStore)) {
+            db.createObjectStore(activeSessionStore, { keyPath: "id" });
+          }
         };
 
         request.onsuccess = (event) => {
@@ -191,6 +195,42 @@
         };
 
         request.onerror = () => reject("خطأ بفتح قاعدة البيانات");
+      });
+    }
+
+    async function saveActiveSession(startTimestamp) {
+      const db = await openDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(activeSessionStore, "readwrite");
+        const store = tx.objectStore(activeSessionStore);
+        const request = store.put({ id: 1, startTimestamp });
+
+        request.onsuccess = () => resolve();
+        request.onerror = () => reject("خطأ بحفظ الجلسة النشطة");
+      });
+    }
+
+    async function getActiveSession() {
+      const db = await openDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(activeSessionStore, "readonly");
+        const store = tx.objectStore(activeSessionStore);
+        const request = store.get(1);
+
+        request.onsuccess = () => resolve(request.result ? request.result.startTimestamp : null);
+        request.onerror = () => reject("خطأ بتحميل الجلسة النشطة");
+      });
+    }
+
+    async function clearActiveSession() {
+      const db = await openDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(activeSessionStore, "readwrite");
+        const store = tx.objectStore(activeSessionStore);
+        const request = store.delete(1);
+
+        request.onsuccess = () => resolve();
+        request.onerror = () => reject("خطأ بحذف الجلسة النشطة");
       });
     }
 
@@ -249,6 +289,7 @@
     let totalSeconds = 0;
     let isRunning = false;
     let breakInterval;
+    let backgroundTimeUpdateInterval;
 
     const timerEl = document.getElementById("timer");
     const totalEl = document.getElementById("totalTime");
@@ -316,16 +357,60 @@
       await loadGoal();
       showMotivation();
       updateChart();
+      checkForActiveSession();
+      askNotificationPermission();
     };
+
+    async function checkForActiveSession() {
+      const activeSession = await getActiveSession();
+      if (activeSession) {
+        const confirmResume = confirm("يوجد جلسة دراسة نشطة من وقت سابق. هل تريد استئنافها؟");
+        if (confirmResume) {
+          startTime = activeSession;
+          isRunning = true;
+          startBackgroundUpdates();
+          timerInterval = setInterval(() => {
+            const elapsed = Math.floor((Date.now() - startTime) / 1000);
+            timerEl.textContent = formatTime(elapsed);
+          }, 1000);
+        } else {
+          await clearActiveSession();
+        }
+      }
+    }
 
     function startTimer() {
       if (isRunning) return;
       isRunning = true;
       startTime = Date.now();
+      saveActiveSession(startTime);
+      startBackgroundUpdates();
+      
       timerInterval = setInterval(() => {
         const elapsed = Math.floor((Date.now() - startTime) / 1000);
         timerEl.textContent = formatTime(elapsed);
       }, 1000);
+      
+      // إرسال إشعار
+      if (Notification.permission === "granted") {
+        new Notification("بدأت جلسة الدراسة", {
+          body: "تم بدء تتبع وقت الدراسة. سيستمر العد حتى عند إغلاق التطبيق.",
+          icon: "https://cdn-icons-png.flaticon.com/512/124/124032.png"
+        });
+      }
+    }
+
+    function startBackgroundUpdates() {
+      // تحديث البيانات في الخلفية كل دقيقة
+      if (backgroundTimeUpdateInterval) {
+        clearInterval(backgroundTimeUpdateInterval);
+      }
+      
+      backgroundTimeUpdateInterval = setInterval(async () => {
+        if (isRunning) {
+          await saveActiveSession(startTime);
+        }
+      }, 60000); // كل دقيقة
     }
 
     async function pauseTimer() {
@@ -340,7 +425,16 @@
       count++;
       sessionEl.textContent = count;
       await saveTodayData(todayString(), totalSeconds, count);
+      await clearActiveSession();
       updateGoalStatus();
+      
+      // إرسال إشعار
+      if (Notification.permission === "granted") {
+        new Notification("تم إيقاف جلسة الدراسة", {
+          body: `تم إيقاف التتبع. الوقت الإجمالي: ${formatTime(totalSeconds)}`,
+          icon: "https://cdn-icons-png.flaticon.com/512/124/124032.png"
+        });
+      }
     }
 
     function updateDisplay() {
@@ -390,6 +484,14 @@
           if (navigator.vibrate) {
             navigator.vibrate([200, 100, 200]);
           }
+          
+          // إرسال إشعار
+          if (Notification.permission === "granted") {
+            new Notification("انتهت الاستراحة", {
+              body: "حان وقت العودة للدراسة!",
+              icon: "https://cdn-icons-png.flaticon.com/512/124/124032.png"
+            });
+          }
         }
       }, 1000);
     }
@@ -399,7 +501,7 @@
         "اليوم أفضل وقت للبدء! 🚀",
         "أنت تقترب من هدفك كل دقيقة. 💪",
         "لا تضغط على نفسك... خطوة كل يوم تكفي. 🌱",
-        "كل تعبك اليوم رح تفرح فيه بكرا. 🏆",
+        "كل تعبك اليوم رح تفرح فيه بكرا. �",
         "استمر! المستقبل يبتسم لك. ✨"
       ];
       const index = new Date().getDay() % messages.length;
@@ -460,7 +562,30 @@
       .then(() => console.log('تم تسجيل Service Worker بنجاح'))
       .catch(err => console.error('فشل تسجيل Service Worker:', err));
     }
+    
+    function askNotificationPermission() {
+      if ("Notification" in window) {
+        if (Notification.permission === "default") {
+          Notification.requestPermission().then(permission => {
+            if (permission === "granted") {
+              console.log("تم منح إذن الإشعارات");
+            }
+          });
+        }
+      }
+    }
 
+    // حفظ البيانات عند إغلاق الصفحة
+    window.addEventListener('beforeunload', async (event) => {
+      if (isRunning) {
+        // لا تقم بإغلاق الصفحة فورًا، بل أعط المستخدم تحذيرًا
+        event.preventDefault();
+        event.returnValue = 'لديك جلسة دراسة نشطة. هل أنت متأكد أنك تريد المغادرة؟';
+        
+        // يمكنك أيضًا حفظ حالة الجلسة الحالية هنا
+        await saveActiveSession(startTime);
+      }
+    });
   </script>
 
 </body>
