@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="UTF-8" />
+  <title>سجل أسابيع الدراسة</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #f0f0f0;
+      direction: rtl;
+      text-align: center;
+      padding: 20px;
+    }
+    h2 {
+      color: #2a9d8f;
+    }
+    input, button {
+      font-size: 16px;
+      padding: 8px;
+      margin: 5px;
+    }
+    #timer {
+      font-size: 28px;
+      margin: 20px;
+      color: #444;
+    }
+    table {
+      margin-top: 20px;
+      width: 100%;
+      max-width: 500px;
+      margin-left: auto;
+      margin-right: auto;
+      border-collapse: collapse;
+      background: white;
+    }
+    th, td {
+      padding: 10px;
+      border: 1px solid #ccc;
+    }
+    .message {
+      font-size: 18px;
+      color: green;
+      margin-top: 15px;
+    }
+  </style>
+</head>
+<body>
+
+  <h2>مؤقت الدراسة الأسبوعي مع سجل الأسابيع</h2>
+
+  <label>مدة الدراسة (دقائق):
+    <input type="number" id="duration" value="25" min="1" />
+  </label><br />
+
+  <button onclick="startTimer()">ابدأ الدراسة</button>
+  <button id="pauseButton" onclick="pauseTimer()" style="display:none;">⏸️ إيقاف مؤقت</button>
+  <button id="resumeButton" onclick="resumeTimer()" style="display:none;">▶️ استئناف</button>
+
+  <div id="timer">00:00</div>
+  <div class="message" id="message"></div>
+
+  <h3>سجل أسابيع الدراسة</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>تاريخ بداية الأسبوع</th>
+        <th>المدة (ساعات)</th>
+      </tr>
+    </thead>
+    <tbody id="weeksLogBody"></tbody>
+  </table>
+
+<script>
+  let countdown;
+  let remainingSeconds = 0;
+  let isPaused = false;
+  let sessionStart = null;
+
+  // سجل الأسابيع: مصفوفة من الكائنات {startDate: "YYYY-MM-DD", minutes: number}
+  let weeksLog = JSON.parse(localStorage.getItem("weeksLog")) || [];
+
+  // بيانات الأسبوع الجاري:
+  let currentWeekStart = localStorage.getItem("currentWeekStart");
+  let currentWeekMinutes = parseInt(localStorage.getItem("currentWeekMinutes")) || 0;
+
+  // إذا ما في بداية أسبوع محددة، نحددها اليوم
+  if (!currentWeekStart) {
+    currentWeekStart = new Date().toISOString().split("T")[0];
+    localStorage.setItem("currentWeekStart", currentWeekStart);
+  }
+
+  function startTimer() {
+    if (remainingSeconds > 0 && isPaused) {
+      resumeTimer();
+      return;
+    }
+
+    const duration = parseInt(document.getElementById("duration").value);
+    if (!duration || duration <= 0) {
+      alert("أدخل مدة صحيحة");
+      return;
+    }
+
+    clearInterval(countdown);
+    remainingSeconds = duration * 60;
+    sessionStart = Date.now();
+    isPaused = false;
+    updateDisplay(remainingSeconds);
+
+    document.getElementById("message").textContent = "";
+    document.getElementById("pauseButton").style.display = "inline-block";
+    document.getElementById("resumeButton").style.display = "none";
+
+    countdown = setInterval(tick, 1000);
+  }
+
+  function tick() {
+    if (remainingSeconds <= 0) {
+      clearInterval(countdown);
+      recordSession(sessionStart);
+      sessionStart = null;
+      document.getElementById("message").textContent = "✅ انتهت مدة الدراسة!";
+      document.getElementById("pauseButton").style.display = "none";
+      document.getElementById("resumeButton").style.display = "none";
+      updateDisplay(0);
+      checkWeekEnd();
+      return;
+    }
+
+    remainingSeconds--;
+    updateDisplay(remainingSeconds);
+  }
+
+  function pauseTimer() {
+    clearInterval(countdown);
+    isPaused = true;
+
+    if (sessionStart) {
+      recordSession(sessionStart);
+      sessionStart = null;
+    }
+
+    document.getElementById("pauseButton").style.display = "none";
+    document.getElementById("resumeButton").style.display = "inline-block";
+    document.getElementById("message").textContent = "⏸️ تم إيقاف المؤقت مؤقتًا.";
+  }
+
+  function resumeTimer() {
+    if (remainingSeconds > 0) {
+      sessionStart = Date.now();
+      isPaused = false;
+      countdown = setInterval(tick, 1000);
+      document.getElementById("pauseButton").style.display = "inline-block";
+      document.getElementById("resumeButton").style.display = "none";
+      document.getElementById("message").textContent = "";
+    }
+  }
+
+  function updateDisplay(seconds) {
+    const mins = Math.floor(seconds / 60).toString().padStart(2, "0");
+    const secs = (seconds % 60).toString().padStart(2, "0");
+    document.getElementById("timer").textContent = `${mins}:${secs}`;
+  }
+
+  function recordSession(startTime) {
+    const now = Date.now();
+    const elapsedSeconds = Math.floor((now - startTime) / 1000);
+    const elapsedMinutes = Math.round(elapsedSeconds / 60);
+
+    if (elapsedMinutes <= 0) return;
+
+    currentWeekMinutes += elapsedMinutes;
+    localStorage.setItem("currentWeekMinutes", currentWeekMinutes);
+    updateWeeksTable();
+  }
+
+  // تحقق إذا انتهى الأسبوع (7 أيام من بداية الأسبوع)
+  function checkWeekEnd() {
+    const start = new Date(currentWeekStart);
+    const today = new Date();
+    const diffDays = Math.floor((today - start) / (1000 * 60 * 60 * 24));
+
+    if (diffDays >= 7) {
+      // أضف الأسبوع الحالي إلى سجل الأسابيع
+      weeksLog.push({
+        startDate: currentWeekStart,
+        minutes: currentWeekMinutes,
+      });
+      localStorage.setItem("weeksLog", JSON.stringify(weeksLog));
+
+      // إعادة تعيين الأسبوع الحالي
+      currentWeekStart = today.toISOString().split("T")[0];
+      currentWeekMinutes = 0;
+      localStorage.setItem("currentWeekStart", currentWeekStart);
+      localStorage.setItem("currentWeekMinutes", currentWeekMinutes);
+
+      alert("🎉 انتهى الأسبوع وتم حفظ بياناته! بدأنا أسبوع جديد.");
+      updateWeeksTable();
+    }
+  }
+
+  // عرض سجل الأسابيع
+  function updateWeeksTable() {
+    const tbody = document.getElementById("weeksLogBody");
+    tbody.innerHTML = "";
+
+    for (let week of weeksLog) {
+      const hours = (week.minutes / 60).toFixed(2);
+      tbody.innerHTML += `<tr><td>${week.startDate}</td><td>${hours}</td></tr>`;
+    }
+
+    // أضف الأسبوع الجاري كصف منفصل (اختياري)
+    if (currentWeekMinutes > 0) {
+      const hours = (currentWeekMinutes / 60).toFixed(2);
+      tbody.innerHTML += `<tr style="font-weight:bold; background:#d0f0d0;">
+        <td>${currentWeekStart} (الأسبوع الحالي)</td><td>${hours}</td></tr>`;
+    }
+  }
+
+  // عند تحميل الصفحة
+  window.onload = function() {
+    updateWeeksTable();
+    checkWeekEnd();
+  };
+</script>
+
+</body>
+</html>

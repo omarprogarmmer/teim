@@ -3,7 +3,10 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta name="theme-color" content="#4CAF50"/>
   <title>تتبع وقت الدراسة - أوفلاين</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" href="icons/icon-192x192.png">
   <style>
     :root {
       --main-color: #4CAF50;
@@ -108,6 +111,45 @@
       font-size: 1rem;
     }
 
+    #connectionStatus {
+      display: none;
+      position: fixed;
+      bottom: 10px;
+      left: 10px;
+      right: 10px;
+      background: #fff3cd;
+      color: #856404;
+      padding: 10px;
+      border-radius: 5px;
+      text-align: center;
+      z-index: 1000;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+    }
+
+    #installContainer {
+      display: none;
+      position: fixed;
+      bottom: 60px;
+      left: 10px;
+      right: 10px;
+      background: #d4edda;
+      color: #155724;
+      padding: 10px;
+      border-radius: 5px;
+      text-align: center;
+      z-index: 1000;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+    }
+
+    #installBtn {
+      background: var(--main-color);
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 5px;
+      margin-top: 8px;
+    }
+
     @media (max-width: 400px) {
       .timer {
         font-size: 2rem;
@@ -137,7 +179,6 @@
     <p>🎯 عدد الجلسات: <span id="sessionCount">0</span></p>
   </div>
 
-  <!-- إضافة قسم الهدف -->
   <div class="section">
     <h2>🎯 هدف الدراسة اليومي (ساعات)</h2>
     <input type="number" id="goalInput" min="0" step="0.1" value="2" />
@@ -162,19 +203,26 @@
     <canvas id="progressChart"></canvas>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <div id="connectionStatus"></div>
 
+  <div id="installContainer">
+    <p>تثبيت التطبيق لتجربة أفضل (يعمل بدون إنترنت)</p>
+    <button id="installBtn">تثبيت الآن</button>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script>
     // ---- IndexedDB setup ----
     const dbName = "StudyTrackerDB";
     const storeName = "studyData";
     const goalStoreName = "goalData";
     const activeSessionStore = "activeSessions";
+    const pendingSyncStore = "pendingSync";
     let db;
 
     function openDB() {
       return new Promise((resolve, reject) => {
-        const request = indexedDB.open(dbName, 2); // Increased version number
+        const request = indexedDB.open(dbName, 3);
 
         request.onupgradeneeded = (event) => {
           db = event.target.result;
@@ -186,6 +234,9 @@
           }
           if (!db.objectStoreNames.contains(activeSessionStore)) {
             db.createObjectStore(activeSessionStore, { keyPath: "id" });
+          }
+          if (!db.objectStoreNames.contains(pendingSyncStore)) {
+            db.createObjectStore(pendingSyncStore, { autoIncrement: true });
           }
         };
 
@@ -236,15 +287,60 @@
 
     async function saveTodayData(dateStr, studySeconds, sessionsCount) {
       const db = await openDB();
+      const data = { date: dateStr, studySeconds, sessionsCount };
+      
+      try {
+        // حفظ محلي في IndexedDB
+        await new Promise((resolve, reject) => {
+          const tx = db.transaction(storeName, "readwrite");
+          const store = tx.objectStore(storeName);
+          const request = store.put(data);
+
+          request.onsuccess = () => resolve();
+          request.onerror = () => reject("خطأ بحفظ البيانات محلياً");
+        });
+
+        // إذا كان هناك اتصال، حاول المزامنة مع الخادم (إن وجد)
+        if (navigator.onLine) {
+          await syncWithServer(data);
+        } else {
+          // إذا لم يكن هناك اتصال، احفظ البيانات للمزامنة لاحقاً
+          await saveForLaterSync(data);
+        }
+      } catch (error) {
+        console.error('Error saving data:', error);
+        throw error;
+      }
+    }
+
+    async function saveForLaterSync(data) {
+      const db = await openDB();
       return new Promise((resolve, reject) => {
-        const tx = db.transaction(storeName, "readwrite");
-        const store = tx.objectStore(storeName);
-        const data = { date: dateStr, studySeconds, sessionsCount };
-        const request = store.put(data);
+        const tx = db.transaction(pendingSyncStore, 'readwrite');
+        const store = tx.objectStore(pendingSyncStore);
+        const request = store.add(data);
 
         request.onsuccess = () => resolve();
-        request.onerror = () => reject("خطأ بحفظ البيانات");
+        request.onerror = () => reject("خطأ بحفظ البيانات للمزامنة");
       });
+    }
+
+    async function syncWithServer(data) {
+      try {
+        // هنا يمكنك إضافة كود لإرسال البيانات إلى الخادم
+        console.log('Syncing data with server:', data);
+        // مثال:
+        // const response = await fetch('your-server-endpoint', {
+        //   method: 'POST',
+        //   headers: { 'Content-Type': 'application/json' },
+        //   body: JSON.stringify(data)
+        // });
+        // if (!response.ok) throw new Error('Server sync failed');
+      } catch (error) {
+        console.error('Failed to sync with server:', error);
+        await saveForLaterSync(data); // احفظ للمزامنة لاحقاً إذا فشلت
+        throw error;
+      }
     }
 
     async function getDataByDate(dateStr) {
@@ -259,7 +355,6 @@
       });
     }
 
-    // ---- تخزين وقراءة الهدف ----
     async function saveGoalValue(goalHours) {
       const db = await openDB();
       return new Promise((resolve, reject) => {
@@ -352,15 +447,6 @@
       }
     }
 
-    window.onload = async function () {
-      await loadTodayProgress();
-      await loadGoal();
-      showMotivation();
-      updateChart();
-      checkForActiveSession();
-      askNotificationPermission();
-    };
-
     async function checkForActiveSession() {
       const activeSession = await getActiveSession();
       if (activeSession) {
@@ -395,7 +481,7 @@
       if (Notification.permission === "granted") {
         new Notification("بدأت جلسة الدراسة", {
           body: "تم بدء تتبع وقت الدراسة. سيستمر العد حتى عند إغلاق التطبيق.",
-          icon: "https://cdn-icons-png.flaticon.com/512/124/124032.png"
+          icon: "icons/icon-192x192.png"
         });
       }
     }
@@ -432,7 +518,7 @@
       if (Notification.permission === "granted") {
         new Notification("تم إيقاف جلسة الدراسة", {
           body: `تم إيقاف التتبع. الوقت الإجمالي: ${formatTime(totalSeconds)}`,
-          icon: "https://cdn-icons-png.flaticon.com/512/124/124032.png"
+          icon: "icons/icon-192x192.png"
         });
       }
     }
@@ -489,7 +575,7 @@
           if (Notification.permission === "granted") {
             new Notification("انتهت الاستراحة", {
               body: "حان وقت العودة للدراسة!",
-              icon: "https://cdn-icons-png.flaticon.com/512/124/124032.png"
+              icon: "icons/icon-192x192.png"
             });
           }
         }
@@ -501,7 +587,7 @@
         "اليوم أفضل وقت للبدء! 🚀",
         "أنت تقترب من هدفك كل دقيقة. 💪",
         "لا تضغط على نفسك... خطوة كل يوم تكفي. 🌱",
-        "كل تعبك اليوم رح تفرح فيه بكرا. �",
+        "كل تعبك اليوم رح تفرح فيه بكرا. 🏆",
         "استمر! المستقبل يبتسم لك. ✨"
       ];
       const index = new Date().getDay() % messages.length;
@@ -556,13 +642,97 @@
       });
     }
 
-    // Service Worker تسجيل
+    // Service Worker تسجيل وتحسينات العمل بدون إنترنت
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('sw.js')
-      .then(() => console.log('تم تسجيل Service Worker بنجاح'))
-      .catch(err => console.error('فشل تسجيل Service Worker:', err));
+      window.addEventListener('load', async () => {
+        try {
+          const registration = await navigator.serviceWorker.register('sw.js');
+          console.log('ServiceWorker registered:', registration);
+          
+          // تحقق من التحديثات
+          registration.addEventListener('updatefound', () => {
+            const newWorker = registration.installing;
+            newWorker.addEventListener('statechange', () => {
+              if (newWorker.state === 'installed') {
+                if (navigator.serviceWorker.controller) {
+                  showUpdateMessage();
+                }
+              }
+            });
+          });
+        } catch (error) {
+          console.error('ServiceWorker registration failed:', error);
+        }
+      });
     }
-    
+
+    // عرض رسالة عند وجود تحديث جديد
+    function showUpdateMessage() {
+      const updateMsg = document.createElement('div');
+      updateMsg.innerHTML = 'يتوفر تحديث جديد! <button onclick="window.location.reload()" style="background: var(--main-color); color: white; border: none; padding: 5px 10px; border-radius: 5px; margin-right: 10px;">تحديث الآن</button>';
+      updateMsg.style.position = 'fixed';
+      updateMsg.style.bottom = '10px';
+      updateMsg.style.left = '10px';
+      updateMsg.style.right = '10px';
+      updateMsg.style.background = '#d4edda';
+      updateMsg.style.color = '#155724';
+      updateMsg.style.padding = '10px';
+      updateMsg.style.borderRadius = '5px';
+      updateMsg.style.textAlign = 'center';
+      updateMsg.style.zIndex = '1000';
+      document.body.appendChild(updateMsg);
+      
+      setTimeout(() => {
+        updateMsg.style.display = 'none';
+      }, 10000);
+    }
+
+    // متابعة حالة الاتصال
+    function updateConnectionStatus() {
+      const connectionStatus = document.getElementById('connectionStatus');
+      if (!navigator.onLine) {
+        connectionStatus.textContent = '⚠️ أنت تعمل بدون إنترنت. البيانات سيتم حفظها محلياً.';
+        connectionStatus.style.display = 'block';
+        connectionStatus.style.background = '#fff3cd';
+        connectionStatus.style.color = '#856404';
+      } else {
+        connectionStatus.textContent = '✓ عودة الاتصال بالإنترنت';
+        connectionStatus.style.background = '#d4edda';
+        connectionStatus.style.color = '#155724';
+        setTimeout(() => {
+          connectionStatus.style.display = 'none';
+        }, 3000);
+      }
+    }
+
+    // دالة تثبيت التطبيق PWA
+    let deferredPrompt;
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      deferredPrompt = e;
+      const installContainer = document.getElementById('installContainer');
+      installContainer.style.display = 'block';
+      
+      document.getElementById('installBtn').addEventListener('click', () => {
+        installContainer.style.display = 'none';
+        deferredPrompt.prompt();
+        deferredPrompt.userChoice.then((choiceResult) => {
+          if (choiceResult.outcome === 'accepted') {
+            console.log('User accepted install');
+          } else {
+            console.log('User dismissed install');
+          }
+          deferredPrompt = null;
+        });
+      });
+    });
+
+    // متابعة تغيرات حالة الاتصال
+    window.addEventListener('online', updateConnectionStatus);
+    window.addEventListener('offline', updateConnectionStatus);
+    window.addEventListener('load', updateConnectionStatus);
+
+    // طلب إذن الإشعارات
     function askNotificationPermission() {
       if ("Notification" in window) {
         if (Notification.permission === "default") {
@@ -578,15 +748,22 @@
     // حفظ البيانات عند إغلاق الصفحة
     window.addEventListener('beforeunload', async (event) => {
       if (isRunning) {
-        // لا تقم بإغلاق الصفحة فورًا، بل أعط المستخدم تحذيرًا
         event.preventDefault();
         event.returnValue = 'لديك جلسة دراسة نشطة. هل أنت متأكد أنك تريد المغادرة؟';
-        
-        // يمكنك أيضًا حفظ حالة الجلسة الحالية هنا
         await saveActiveSession(startTime);
       }
     });
-  </script>
 
+    // تحميل البيانات عند بدء التشغيل
+    window.onload = async function () {
+      await loadTodayProgress();
+      await loadGoal();
+      showMotivation();
+      updateChart();
+      checkForActiveSession();
+      askNotificationPermission();
+      updateConnectionStatus();
+    };
+  </script>
 </body>
 </html>
